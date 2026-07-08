@@ -39,11 +39,11 @@ try {
     if (-not $NoTranscript) {
         $logPath = Start-WslVhdLog -Config $config -Name 'wsl-vhd-unmount.log'
         $transcriptStarted = $true
-        Write-Host "Log: $logPath"
+        Write-WslVhdTerminal -Level INFO -Message "Log: $logPath"
     }
 
     if ($ShutdownWsl) {
-        Write-Host "Encerrando WSL antes de desmontar."
+        Write-WslVhdTerminal -Level INFO -Message "Encerrando WSL antes de desmontar."
         Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('--shutdown') -IgnoreExitCode | Out-Null
     }
 
@@ -60,14 +60,14 @@ try {
 
     $image = Get-DiskImage -ImagePath $vhdPath -ErrorAction Stop
     if ($image.Attached) {
-        Write-Host "Desanexando VHD do Windows: $vhdPath"
+        Write-WslVhdTerminal -Level INFO -Message "Desanexando VHD do Windows: $vhdPath"
         Dismount-VHD -Path $vhdPath -ErrorAction Stop
     }
     else {
-        Write-Host "VHD ja estava desanexado no Windows."
+        Write-WslVhdTerminal -Level OK -Message "VHD ja estava desanexado no Windows."
     }
 
-    Write-Host "OK: VHD desmontado."
+    Write-WslVhdTerminal -Level OK -Message "VHD desmontado."
 }
 finally {
     if ($transcriptStarted) {

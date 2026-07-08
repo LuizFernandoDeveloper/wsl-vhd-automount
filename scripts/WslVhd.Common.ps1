@@ -76,6 +76,42 @@ function Test-WslVhdAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Write-WslVhdTerminal {
+    param(
+        [ValidateSet('INFO', 'OK', 'WARN', 'ERROR', 'RUN')]
+        [string]$Level = 'INFO',
+
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    $colors = @{
+        INFO = 'Cyan'
+        OK = 'Green'
+        WARN = 'Yellow'
+        ERROR = 'Red'
+        RUN = 'DarkCyan'
+    }
+
+    $line = "[$Level] $Message"
+    if ($colors.ContainsKey($Level)) {
+        Write-Host $line -ForegroundColor $colors[$Level]
+    }
+    else {
+        Write-Host $line
+    }
+}
+
+function Write-WslVhdSection {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Title
+    )
+
+    Write-Host ""
+    Write-WslVhdTerminal -Level INFO -Message "== $Title =="
+}
+
 function Join-WslVhdCommandLine {
     param(
         [Parameter(Mandatory = $true)]
@@ -99,7 +135,9 @@ function Invoke-WslVhdSelfElevation {
         [Parameter(Mandatory = $true)]
         [string]$ScriptPath,
 
-        [string[]]$ArgumentList = @()
+        [string[]]$ArgumentList = @(),
+
+        [switch]$ThrowOnFailure
     )
 
     $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
@@ -109,11 +147,21 @@ function Invoke-WslVhdSelfElevation {
         '-File', $ScriptPath
     ) + $ArgumentList
 
-    $process = Start-Process -FilePath $powershell `
-        -ArgumentList (Join-WslVhdCommandLine -ArgumentList $args) `
-        -Verb RunAs `
-        -PassThru `
-        -Wait
+    try {
+        $process = Start-Process -FilePath $powershell `
+            -ArgumentList (Join-WslVhdCommandLine -ArgumentList $args) `
+            -Verb RunAs `
+            -PassThru `
+            -Wait
+    }
+    catch {
+        if ($ThrowOnFailure) {
+            throw
+        }
+
+        Write-WslVhdTerminal -Level ERROR -Message "Falha ao abrir permissao de Administrador/UAC: $($_.Exception.Message)"
+        exit 1
+    }
 
     exit $process.ExitCode
 }
@@ -148,12 +196,22 @@ function Invoke-WslVhdNativeCommand {
         [switch]$IgnoreExitCode
     )
 
-    Write-Host "> $FilePath $($ArgumentList -join ' ')"
-    $output = & $FilePath @ArgumentList 2>&1
+    Write-WslVhdTerminal -Level RUN -Message "$FilePath $($ArgumentList -join ' ')"
+    $rawOutput = & $FilePath @ArgumentList 2>&1
     $exitCode = $LASTEXITCODE
+    $output = foreach ($line in $rawOutput) {
+        if ($line -is [System.Management.Automation.ErrorRecord]) {
+            $text = $line.Exception.Message
+        }
+        else {
+            $text = [string]$line
+        }
+
+        $text -replace "`0", ''
+    }
 
     if ($null -ne $output) {
-        $output | ForEach-Object { Write-Host $_ }
+        $output | Where-Object { $_ -ne '' } | ForEach-Object { Write-Host $_ }
     }
 
     if (-not $IgnoreExitCode -and $exitCode -ne 0) {

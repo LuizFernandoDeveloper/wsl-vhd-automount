@@ -50,7 +50,7 @@ try {
     if (-not $NoTranscript) {
         $logPath = Start-WslVhdLog -Config $config
         $transcriptStarted = $true
-        Write-Host "Log: $logPath"
+        Write-WslVhdTerminal -Level INFO -Message "Log: $logPath"
     }
 
     Get-Command wsl.exe -ErrorAction Stop | Out-Null
@@ -59,17 +59,17 @@ try {
         try {
             $service = Get-Service -Name 'LxssManager' -ErrorAction Stop
             if ($service.Status -ne 'Running') {
-                Write-Host "Acordando servico WSL: LxssManager"
+                Write-WslVhdTerminal -Level INFO -Message "Acordando servico WSL: LxssManager"
                 Start-Service -Name 'LxssManager' -ErrorAction Stop
             }
         }
         catch {
-            Write-Warning "Nao foi possivel acordar LxssManager antes do mount: $($_.Exception.Message)"
+            Write-WslVhdTerminal -Level WARN -Message "Nao foi possivel acordar LxssManager antes do mount: $($_.Exception.Message)"
         }
     }
 
     if ($ForceRemount) {
-        Write-Host "Forcando remontagem anterior, se existir."
+        Write-WslVhdTerminal -Level INFO -Message "Forcando remontagem anterior, se existir."
         if ($preferDirectVhdMount) {
             Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('--unmount', $vhdPath) -IgnoreExitCode | Out-Null
         }
@@ -92,16 +92,16 @@ try {
 
         $image = Get-DiskImage -ImagePath $vhdPath -ErrorAction Stop
         if (-not $image.Attached) {
-            Write-Host "Anexando VHD no Windows: $vhdPath"
+            Write-WslVhdTerminal -Level INFO -Message "Anexando VHD no Windows: $vhdPath"
             Mount-VHD -Path $vhdPath -ErrorAction Stop | Out-Null
         }
         else {
-            Write-Host "VHD ja estava anexado no Windows."
+            Write-WslVhdTerminal -Level OK -Message "VHD ja estava anexado no Windows."
         }
 
         $disk = Get-WslVhdDisk -VhdPath $vhdPath
         $diskPath = Get-WslVhdDiskPath -Disk $disk
-        Write-Host "Disco detectado dinamicamente: $diskPath"
+        Write-WslVhdTerminal -Level INFO -Message "Disco detectado dinamicamente: $diskPath"
         $mountArgs = @('--mount', $diskPath)
     }
 
@@ -122,7 +122,7 @@ try {
     $result = Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList $mountArgs -IgnoreExitCode
     if ($result.ExitCode -ne 0) {
         if (Test-WslVhdMountAvailable -MountName $mountName -DistroName $distroName) {
-            Write-Host "O WSL retornou aviso/erro, mas o ponto /mnt/wsl/$mountName ja esta montado."
+            Write-WslVhdTerminal -Level WARN -Message "O WSL retornou aviso/erro, mas o ponto /mnt/wsl/$mountName ja esta montado."
         }
         else {
             throw "Falha ao montar o disco no WSL. Veja o log para a saida completa."
@@ -130,15 +130,15 @@ try {
     }
 
     if ($startDistro -and -not $NoStartDistro -and -not [string]::IsNullOrWhiteSpace($distroName)) {
-        Write-Host "Acordando distro configurada: $distroName"
+        Write-WslVhdTerminal -Level INFO -Message "Acordando distro configurada: $distroName"
         Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('-d', $distroName, '--exec', 'sh', '-lc', 'true') | Out-Null
     }
 
     if (Test-WslVhdMountAvailable -MountName $mountName -DistroName $distroName) {
-        Write-Host "OK: disponivel em /mnt/wsl/$mountName"
+        Write-WslVhdTerminal -Level OK -Message "Disponivel em /mnt/wsl/$mountName"
     }
     else {
-        Write-Warning "Montagem concluida, mas nao consegui confirmar /mnt/wsl/$mountName pelo probe do WSL."
+        Write-WslVhdTerminal -Level WARN -Message "Montagem concluida, mas nao consegui confirmar /mnt/wsl/$mountName pelo probe do WSL."
     }
 }
 finally {

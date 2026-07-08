@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Test-WslVhdAdministrator)) {
     if ($NoElevate) {
-        Write-Warning "Sem Administrador: BitLocker pode negar status detalhado."
+        Write-WslVhdTerminal -Level WARN -Message "Sem Administrador: BitLocker pode negar status detalhado."
     }
     else {
         $elevatedArgs = @()
@@ -31,24 +31,21 @@ $projectRoot = [string]$config['ProjectRoot']
 $vhdPath = Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'VhdPath')) -BasePath $projectRoot
 $taskName = [string](Get-WslVhdConfigValue -Config $config -Name 'TaskName' -Default 'WSL VHD Automount')
 
-Write-Host "== Host readiness =="
-Write-Host "Projeto: $projectRoot"
-Write-Host "VHDX:    $vhdPath"
-Write-Host ""
+Write-WslVhdSection -Title 'Host readiness'
+Write-WslVhdTerminal -Level INFO -Message "Projeto: $projectRoot"
+Write-WslVhdTerminal -Level INFO -Message "VHDX: $vhdPath"
 
-Write-Host "== Volumes =="
+Write-WslVhdSection -Title 'Volumes'
 Get-Volume |
     Select-Object DriveLetter, FileSystemLabel, FileSystem, DriveType, HealthStatus, SizeRemaining, Size |
     Format-Table -AutoSize
 
-Write-Host ""
-Write-Host "== Discos =="
+Write-WslVhdSection -Title 'Discos'
 Get-Disk |
     Select-Object Number, FriendlyName, BusType, OperationalStatus, PartitionStyle, Size |
     Format-Table -AutoSize
 
-Write-Host ""
-Write-Host "== BitLocker =="
+Write-WslVhdSection -Title 'BitLocker'
 $bitLockerRows = @()
 foreach ($volume in Get-Volume | Where-Object { $null -ne $_.DriveLetter }) {
     $mountPoint = "$($volume.DriveLetter):"
@@ -79,8 +76,7 @@ foreach ($volume in Get-Volume | Where-Object { $null -ne $_.DriveLetter }) {
 
 $bitLockerRows | Format-Table -AutoSize
 
-Write-Host ""
-Write-Host "== VHDX =="
+Write-WslVhdSection -Title 'VHDX'
 try {
     if (Test-Path -LiteralPath $vhdPath) {
         Get-DiskImage -ImagePath $vhdPath |
@@ -88,29 +84,58 @@ try {
             Format-List
     }
     else {
-        Write-Warning "VHDX nao encontrado. Se o drive usa BitLocker, talvez ainda esteja bloqueado."
+        Write-WslVhdTerminal -Level WARN -Message "VHDX nao encontrado. Se o drive usa BitLocker, talvez ainda esteja bloqueado."
     }
 }
 catch {
-    Write-Warning "Nao consegui ler o VHDX: $($_.Exception.Message)"
+    Write-WslVhdTerminal -Level WARN -Message "Nao consegui ler o VHDX: $($_.Exception.Message)"
 }
 
-Write-Host ""
-Write-Host "== WSL =="
+Write-WslVhdSection -Title 'WSL'
 try {
     Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('--version') -IgnoreExitCode | Out-Null
     Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('--list', '--verbose') -IgnoreExitCode | Out-Null
 }
 catch {
-    Write-Warning "Nao consegui consultar WSL: $($_.Exception.Message)"
+    Write-WslVhdTerminal -Level WARN -Message "Nao consegui consultar WSL: $($_.Exception.Message)"
 }
 
-Write-Host ""
-Write-Host "== Tarefa Agendada =="
-$taskOutput = & schtasks.exe /Query /TN $taskName /FO LIST /V 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Tarefa nao encontrada: $taskName"
+Write-WslVhdSection -Title 'Tarefa Agendada'
+$previousErrorActionPreference = $ErrorActionPreference
+$nativePreference = Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue
+$previousNativePreference = $null
+if ($nativePreference) {
+    $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+try {
+    $ErrorActionPreference = 'Continue'
+    $taskOutputRaw = & schtasks.exe /Query /TN $taskName /FO LIST /V 2>&1
+    $taskExitCode = $LASTEXITCODE
+    $taskOutput = foreach ($line in $taskOutputRaw) {
+        if ($line -is [System.Management.Automation.ErrorRecord]) {
+            $line.Exception.Message
+        }
+        else {
+            [string]$line
+        }
+    }
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    if ($nativePreference) {
+        $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+    }
+}
+
+if ($taskExitCode -ne 0) {
+    Write-WslVhdTerminal -Level WARN -Message "Tarefa nao encontrada: $taskName"
+    if ($taskOutput) {
+        $taskOutput | ForEach-Object { Write-Host $_ }
+    }
 }
 else {
+    Write-WslVhdTerminal -Level OK -Message "Tarefa encontrada: $taskName"
     $taskOutput | ForEach-Object { Write-Host $_ }
 }

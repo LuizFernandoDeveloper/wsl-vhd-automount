@@ -1,4 +1,6 @@
-logs/
+/logs/
+launchers/logs/*
+!launchers/logs/.gitkeep
 *.log
 *.tmp
 *.bak

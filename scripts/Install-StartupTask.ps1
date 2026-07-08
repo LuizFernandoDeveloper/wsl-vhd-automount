@@ -8,11 +8,50 @@ param(
     [int]$TaskPriority = -1,
     [string]$TaskMode = '',
     [switch]$RunNow,
-    [switch]$NoElevate
+    [switch]$NoElevate,
+    [string]$InstallLogPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'WslVhd.Common.ps1')
+
+$script:InstallTranscriptStarted = $false
+
+function Stop-WslVhdInstallTranscript {
+    if ($script:InstallTranscriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        }
+        catch {
+            Write-WslVhdTerminal -Level WARN -Message "Nao foi possivel encerrar o log do instalador: $($_.Exception.Message)"
+        }
+        finally {
+            $script:InstallTranscriptStarted = $false
+        }
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($InstallLogPath)) {
+    try {
+        $installLogDirectory = Split-Path -Parent $InstallLogPath
+        if (-not [string]::IsNullOrWhiteSpace($installLogDirectory)) {
+            New-Item -ItemType Directory -Force -Path $installLogDirectory | Out-Null
+        }
+
+        Start-Transcript -Path $InstallLogPath -Append | Out-Null
+        $script:InstallTranscriptStarted = $true
+        Write-WslVhdTerminal -Level INFO -Message "Log do instalador: $InstallLogPath"
+    }
+    catch {
+        Write-WslVhdTerminal -Level WARN -Message "Nao foi possivel iniciar o log do instalador em '$InstallLogPath': $($_.Exception.Message)"
+    }
+}
+
+trap {
+    Write-WslVhdTerminal -Level ERROR -Message $_.Exception.Message
+    Stop-WslVhdInstallTranscript
+    exit 1
+}
 
 if (-not (Test-WslVhdAdministrator)) {
     if ($NoElevate) {
@@ -42,8 +81,31 @@ if (-not (Test-WslVhdAdministrator)) {
         $elevatedArgs += @('-TaskMode', $TaskMode)
     }
     if ($RunNow) { $elevatedArgs += '-RunNow' }
+    if (-not [string]::IsNullOrWhiteSpace($InstallLogPath)) {
+        $elevatedArgs += @('-InstallLogPath', $InstallLogPath)
+    }
 
-    Invoke-WslVhdSelfElevation -ScriptPath $PSCommandPath -ArgumentList $elevatedArgs
+    Write-WslVhdTerminal -Level INFO -Message "Solicitando permissao de Administrador para registrar a Tarefa Agendada..."
+    Stop-WslVhdInstallTranscript
+
+    try {
+        Invoke-WslVhdSelfElevation -ScriptPath $PSCommandPath -ArgumentList $elevatedArgs -ThrowOnFailure
+    }
+    catch {
+        if (-not [string]::IsNullOrWhiteSpace($InstallLogPath)) {
+            try {
+                Start-Transcript -Path $InstallLogPath -Append | Out-Null
+                $script:InstallTranscriptStarted = $true
+            }
+            catch {
+                Write-WslVhdTerminal -Level WARN -Message "Nao foi possivel reabrir o log do instalador em '$InstallLogPath': $($_.Exception.Message)"
+            }
+        }
+
+        Write-WslVhdTerminal -Level ERROR -Message "Falha ao abrir permissao de Administrador/UAC: $($_.Exception.Message)"
+        Stop-WslVhdInstallTranscript
+        exit 1
+    }
 }
 
 $configArgs = @{}
@@ -258,31 +320,33 @@ Register-ScheduledTask `
     -Description 'Monta automaticamente um VHDX ext4 no WSL 2 ao fazer logon.' `
     -Force | Out-Null
 
-Write-Host "OK: tarefa registrada: $TaskName"
-Write-Host "Modo: $TaskMode"
+Write-WslVhdTerminal -Level OK -Message "Tarefa registrada: $TaskName"
+Write-WslVhdTerminal -Level INFO -Message "Modo: $TaskMode"
 if ($TaskMode -eq 'Logged') {
-    Write-Host "Programa/script: $powershell"
-    Write-Host "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $runnerArgs)"
-    Write-Host "Log: $((Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'LogDirectory' -Default '.\logs')) -BasePath $projectRoot))"
+    Write-WslVhdTerminal -Level INFO -Message "Programa/script: $powershell"
+    Write-WslVhdTerminal -Level INFO -Message "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $runnerArgs)"
+    Write-WslVhdTerminal -Level INFO -Message "Log: $((Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'LogDirectory' -Default '.\logs')) -BasePath $projectRoot))"
 }
 elseif ($TaskMode -eq 'Direct') {
-    Write-Host "Programa/script: $wslExe"
-    Write-Host "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $directArgs)"
+    Write-WslVhdTerminal -Level INFO -Message "Programa/script: $wslExe"
+    Write-WslVhdTerminal -Level INFO -Message "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $directArgs)"
 }
 else {
-    Write-Host "Bootstrap: $bootstrapPath"
+    Write-WslVhdTerminal -Level INFO -Message "Bootstrap: $bootstrapPath"
 }
-Write-Host "Politica BitLocker/logon: inicio imediato, atraso inicial de $InitialDelaySeconds s, restart por $RetryMinutes min a cada $effectiveRetryIntervalSeconds s, prioridade $TaskPriority."
+Write-WslVhdTerminal -Level INFO -Message "Politica BitLocker/logon: inicio imediato, atraso inicial de $InitialDelaySeconds s, restart por $RetryMinutes min a cada $effectiveRetryIntervalSeconds s, prioridade $TaskPriority."
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName
     if ($TaskMode -eq 'Bootstrap') {
-        Write-Host "Tarefa iniciada agora. Veja logs em: $bootstrapDir"
+        Write-WslVhdTerminal -Level OK -Message "Tarefa iniciada agora. Veja logs em: $bootstrapDir"
     }
     elseif ($TaskMode -eq 'Logged') {
-        Write-Host "Tarefa silenciosa iniciada agora. Veja logs na pasta configurada."
+        Write-WslVhdTerminal -Level OK -Message "Tarefa silenciosa iniciada agora. Veja logs na pasta configurada."
     }
     else {
-        Write-Host "Tarefa direta iniciada agora. Confira o resultado no Agendador de Tarefas ou rode .\scripts\Show-Status.ps1."
+        Write-WslVhdTerminal -Level OK -Message "Tarefa direta iniciada agora. Confira o resultado no Agendador de Tarefas ou rode .\scripts\Show-Status.ps1."
     }
 }
+
+Stop-WslVhdInstallTranscript

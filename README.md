@@ -21,6 +21,7 @@ Automount silencioso e rapido para VHDX ext4 no WSL 2. Ele monta um disco Linux 
 - [Por Que Existe](#por-que-existe)
 - [Inicio Rapido](#inicio-rapido)
 - [BitLocker E Velocidade](#bitlocker-e-velocidade)
+- [Experiencia Do Terminal](#experiencia-do-terminal)
 - [Comandos](#comandos)
 - [Configuracao](#configuracao)
 - [Diagnostico Do Host](#diagnostico-do-host)
@@ -63,6 +64,12 @@ Com dois cliques:
 
 ```bat
 launchers\instalar_automount_logon.bat
+```
+
+Se a janela mostrar erro vermelho e fechar rapido, o instalador deixa o motivo em:
+
+```text
+launchers\logs\install-startup-task.latest.log
 ```
 
 Ou pelo PowerShell como Administrador:
@@ -146,6 +153,28 @@ Ou:
 ```
 
 Use isso somente no computador em que voce confia. Auto-unlock melhora a ergonomia e a velocidade, mas tambem muda o modelo de seguranca: aquele Windows passa a ter material local para liberar o volume depois que a sessao/OS estiver desbloqueada.
+
+## Experiencia Do Terminal
+
+Mesma linha do [`Backup_wsl-`](https://github.com/LuizFernandoDeveloper/Backup_wsl-): o terminal e tratado como uma interface de operacao. Cada saida precisa deixar claro o estado, o risco e o proximo lugar onde olhar.
+
+| Estado | Cor | Como ler |
+| --- | --- | --- |
+| `[INFO]` | ciano | contexto, caminhos, configuracao e passos em andamento |
+| `[RUN]` | ciano escuro | comando externo executado pelo script |
+| `[OK]` | verde | etapa concluida ou estado validado |
+| `[WARN]` | amarelo | algo merece atencao, mas ainda pode ser esperado |
+| `[ERROR]` | vermelho | parada segura; abra o log antes de tentar de novo |
+
+Boas praticas aplicadas:
+
+- o automount do logon roda escondido, sem janela piscando;
+- launchers manuais mostram o caminho do log antes de sair;
+- a janela pausa somente quando acontece erro;
+- scripts retornam exit code diferente de zero em falha real;
+- comandos externos aparecem com `[RUN]`, para facilitar copia e diagnostico;
+- logs do automount ficam em `logs\`, logs dos launchers ficam em `launchers\logs\`;
+- diagnosticos nao quebram quando a tarefa ainda nao existe: eles mostram `[WARN]` e o proximo passo.
 
 ## Comandos
 
@@ -266,6 +295,18 @@ Ele procura o projeto em todos os drives. Isso ajuda quando a letra da midia mud
 
 ## Troubleshooting
 
+### O launcher piscou vermelho
+
+O instalador por `.bat` grava um log proprio em:
+
+```text
+launchers\logs\install-startup-task.latest.log
+```
+
+Esse log mostra se o problema foi permissao de Administrador, cancelamento do UAC, politica de execucao, caminho do projeto, ou falha ao registrar/iniciar a Tarefa Agendada.
+
+Se a instalacao terminar com erro, o launcher pausa a janela e mostra esse caminho.
+
 ### Logs Silenciosos
 
 O modo `Logged` grava em:
@@ -358,6 +399,8 @@ wsl-vhd-automount
 |   |-- diagnosticar_host_wsl.bat
 |   |-- habilitar_bitlocker_autounlock.bat
 |   |-- instalar_automount_logon.bat
+|   |-- logs
+|   |   `-- .gitkeep
 |   |-- media_removivel_init.bat
 |   `-- remover_automount_logon.bat
 |-- scripts
@@ -405,4 +448,6 @@ Copyright 2026 Luiz Fernando.
 - [Microsoft Learn: TaskSettings.Priority](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-priority)
 - [Microsoft Learn: New-ScheduledTaskSettingsSet](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset)
 - [Microsoft Learn: Enable-BitLockerAutoUnlock](https://learn.microsoft.com/en-us/powershell/module/bitlocker/enable-bitlockerautounlock)
+- [LuizFernandoDeveloper/Backup_wsl-](https://github.com/LuizFernandoDeveloper/Backup_wsl-)
+- [CLI Guidelines](https://clig.dev/)
 - [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)

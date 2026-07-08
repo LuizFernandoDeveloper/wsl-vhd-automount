@@ -37,19 +37,20 @@ if ([string]::IsNullOrWhiteSpace($driveRoot)) {
 $mountPoint = $driveRoot.TrimEnd('\')
 $volume = Get-BitLockerVolume -MountPoint $mountPoint -ErrorAction Stop
 
-Write-Host "Drive do VHDX: $mountPoint"
-Write-Host "Status atual: LockStatus=$($volume.LockStatus), ProtectionStatus=$($volume.ProtectionStatus), AutoUnlockEnabled=$($volume.AutoUnlockEnabled)"
+Write-WslVhdSection -Title 'BitLocker auto-unlock'
+Write-WslVhdTerminal -Level INFO -Message "Drive do VHDX: $mountPoint"
+Write-WslVhdTerminal -Level INFO -Message "Status atual: LockStatus=$($volume.LockStatus), ProtectionStatus=$($volume.ProtectionStatus), AutoUnlockEnabled=$($volume.AutoUnlockEnabled)"
 
 if ($volume.LockStatus -ne 'Unlocked') {
     throw "O drive $mountPoint esta bloqueado. Desbloqueie o BitLocker antes de habilitar auto-unlock."
 }
 
 if ($volume.AutoUnlockEnabled) {
-    Write-Host "OK: auto-unlock ja esta habilitado para $mountPoint."
+    Write-WslVhdTerminal -Level OK -Message "Auto-unlock ja esta habilitado para $mountPoint."
     return
 }
 
 if ($PSCmdlet.ShouldProcess($mountPoint, 'Enable-BitLockerAutoUnlock')) {
     Enable-BitLockerAutoUnlock -MountPoint $mountPoint -ErrorAction Stop
-    Write-Host "OK: auto-unlock habilitado para $mountPoint."
+    Write-WslVhdTerminal -Level OK -Message "Auto-unlock habilitado para $mountPoint."
 }

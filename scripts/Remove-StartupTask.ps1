@@ -40,16 +40,16 @@ if ([string]::IsNullOrWhiteSpace($TaskName)) {
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($null -ne $task) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Host "OK: tarefa removida: $TaskName"
+    Write-WslVhdTerminal -Level OK -Message "Tarefa removida: $TaskName"
 }
 else {
-    Write-Host "Tarefa nao encontrada: $TaskName"
+    Write-WslVhdTerminal -Level WARN -Message "Tarefa nao encontrada: $TaskName"
 }
 
 if (-not $KeepBootstrap) {
     $bootstrapPath = Join-Path (Join-Path $env:LOCALAPPDATA 'WslVhdAutomount') 'Start-WslVhdAutomount.ps1'
     if (Test-Path -LiteralPath $bootstrapPath) {
         Remove-Item -LiteralPath $bootstrapPath -Force
-        Write-Host "Bootstrap removido: $bootstrapPath"
+        Write-WslVhdTerminal -Level OK -Message "Bootstrap removido: $bootstrapPath"
     }
 }

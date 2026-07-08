@@ -20,35 +20,45 @@ $distroName = [string](Get-WslVhdConfigValue -Config $config -Name 'DistroName' 
 
 Assert-WslVhdMountName -MountName $mountName
 
-Write-Host "Projeto: $projectRoot"
-Write-Host "Config:  $($config['ConfigPath'])"
-Write-Host "VHDX:    $vhdPath"
+Write-WslVhdSection -Title 'Status'
+Write-WslVhdTerminal -Level INFO -Message "Projeto: $projectRoot"
+Write-WslVhdTerminal -Level INFO -Message "Config: $($config['ConfigPath'])"
+Write-WslVhdTerminal -Level INFO -Message "VHDX: $vhdPath"
 
 $image = Get-DiskImage -ImagePath $vhdPath -ErrorAction Stop
 $sizeGb = [math]::Round($image.Size / 1GB, 2)
 $fileSizeGb = [math]::Round($image.FileSize / 1GB, 2)
 
-Write-Host "Tamanho virtual: $sizeGb GB"
-Write-Host "Tamanho em disco: $fileSizeGb GB"
-Write-Host "Anexado no Windows: $($image.Attached)"
+Write-WslVhdTerminal -Level INFO -Message "Tamanho virtual: $sizeGb GB"
+Write-WslVhdTerminal -Level INFO -Message "Tamanho em disco: $fileSizeGb GB"
+if ($image.Attached) {
+    Write-WslVhdTerminal -Level OK -Message 'Anexado no Windows: True'
+}
+else {
+    Write-WslVhdTerminal -Level WARN -Message 'Anexado no Windows: False'
+}
 
 if ($image.Attached) {
     try {
         $disk = Get-WslVhdDisk -VhdPath $vhdPath -TimeoutSeconds 3
-        Write-Host "PhysicalDrive atual: $(Get-WslVhdDiskPath -Disk $disk)"
+        Write-WslVhdTerminal -Level INFO -Message "PhysicalDrive atual: $(Get-WslVhdDiskPath -Disk $disk)"
     }
     catch {
-        Write-Warning $_.Exception.Message
+        Write-WslVhdTerminal -Level WARN -Message $_.Exception.Message
     }
 }
 
-Write-Host "Mount WSL esperado: /mnt/wsl/$mountName"
+Write-WslVhdTerminal -Level INFO -Message "Mount WSL esperado: /mnt/wsl/$mountName"
 
 if (-not $SkipWslProbe) {
     $mounted = Test-WslVhdMountAvailable -MountName $mountName -DistroName $distroName
-    Write-Host "Montado no WSL: $mounted"
+    if ($mounted) {
+        Write-WslVhdTerminal -Level OK -Message 'Montado no WSL: True'
+    }
+    else {
+        Write-WslVhdTerminal -Level WARN -Message 'Montado no WSL: False'
+    }
 }
 
-Write-Host ""
-Write-Host "Distribuicoes WSL:"
+Write-WslVhdSection -Title 'Distribuicoes WSL'
 Invoke-WslVhdNativeCommand -FilePath 'wsl.exe' -ArgumentList @('--list', '--verbose') -IgnoreExitCode | Out-Null
