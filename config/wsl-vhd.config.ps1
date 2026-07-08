@@ -22,4 +22,9 @@ $WslVhdConfig = @{
 
     LogDirectory = '.\logs'
     TaskName = 'WSL VHD Automount'
+
+    # BitLocker/removable disks can take a moment to unlock after logon.
+    StartupInitialDelaySeconds = 20
+    StartupRetryMinutes = 10
+    StartupRetryIntervalSeconds = 15
 }

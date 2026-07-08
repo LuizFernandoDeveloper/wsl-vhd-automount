@@ -41,6 +41,8 @@ scripts/
   Remove-StartupTask.ps1
   WslVhd.Common.ps1
 media_removivel_init.bat
+instalar_automount_logon.bat
+remover_automount_logon.bat
 ```
 
 ## Configuracao
@@ -112,10 +114,18 @@ Se o WSL travou segurando o disco, use:
 
 Use uma Tarefa Agendada com privilegio elevado. Isso e mais confiavel do que colocar um atalho `.bat` na pasta Inicializar.
 
+Para HDs protegidos por BitLocker, o projeto usa logon em vez de boot puro. No boot o volume ainda pode estar bloqueado; no logon o Windows ja tem contexto para desbloquear o disco ou pedir a chave/senha. O bootstrap espera um pouco e tenta novamente por alguns minutos, entao a montagem sobrevive a atrasos normais de BitLocker, USB e WSL.
+
 Abra PowerShell como Administrador:
 
 ```powershell
 .\scripts\Install-StartupTask.ps1
+```
+
+Ou de dois cliques em:
+
+```bat
+.\instalar_automount_logon.bat
 ```
 
 Para instalar e ja testar:
@@ -130,6 +140,12 @@ Para remover:
 .\scripts\Remove-StartupTask.ps1
 ```
 
+Ou:
+
+```bat
+.\remover_automount_logon.bat
+```
+
 O instalador cria um bootstrap em:
 
 ```text
@@ -137,6 +153,14 @@ O instalador cria um bootstrap em:
 ```
 
 Esse bootstrap procura a pasta do projeto em todos os drives. Assim, se a midia removivel mudar de letra, a Tarefa Agendada ainda tem uma chance boa de encontrar o script.
+
+Os tempos ficam em `config/wsl-vhd.config.ps1`:
+
+```powershell
+StartupInitialDelaySeconds = 20
+StartupRetryMinutes = 10
+StartupRetryIntervalSeconds = 15
+```
 
 ## Logs
 

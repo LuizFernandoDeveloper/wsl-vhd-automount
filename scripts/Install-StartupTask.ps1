@@ -2,6 +2,9 @@
 param(
     [string]$ConfigPath = '',
     [string]$TaskName = '',
+    [int]$InitialDelaySeconds = -1,
+    [int]$RetryMinutes = -1,
+    [int]$RetryIntervalSeconds = -1,
     [switch]$RunNow,
     [switch]$NoElevate
 )
@@ -21,6 +24,15 @@ if (-not (Test-WslVhdAdministrator)) {
     if (-not [string]::IsNullOrWhiteSpace($TaskName)) {
         $elevatedArgs += @('-TaskName', $TaskName)
     }
+    if ($InitialDelaySeconds -ge 0) {
+        $elevatedArgs += @('-InitialDelaySeconds', "$InitialDelaySeconds")
+    }
+    if ($RetryMinutes -ge 0) {
+        $elevatedArgs += @('-RetryMinutes', "$RetryMinutes")
+    }
+    if ($RetryIntervalSeconds -ge 0) {
+        $elevatedArgs += @('-RetryIntervalSeconds', "$RetryIntervalSeconds")
+    }
     if ($RunNow) { $elevatedArgs += '-RunNow' }
 
     Invoke-WslVhdSelfElevation -ScriptPath $PSCommandPath -ArgumentList $elevatedArgs
@@ -36,6 +48,16 @@ $projectRoot = [string]$config['ProjectRoot']
 
 if ([string]::IsNullOrWhiteSpace($TaskName)) {
     $TaskName = [string](Get-WslVhdConfigValue -Config $config -Name 'TaskName' -Default 'WSL VHD Automount')
+}
+
+if ($InitialDelaySeconds -lt 0) {
+    $InitialDelaySeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupInitialDelaySeconds' -Default 20)
+}
+if ($RetryMinutes -lt 0) {
+    $RetryMinutes = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupRetryMinutes' -Default 10)
+}
+if ($RetryIntervalSeconds -lt 0) {
+    $RetryIntervalSeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupRetryIntervalSeconds' -Default 15)
 }
 
 $mountScript = Join-Path $projectRoot 'scripts\Mount-WslVhd.ps1'
@@ -54,6 +76,9 @@ $bootstrap = @"
 `$relativeMountScript = '$($relativeMountScript -replace "'", "''")'
 `$fallbackMountScript = '$($mountScript -replace "'", "''")'
 `$logPath = '$($bootstrapLog -replace "'", "''")'
+`$initialDelaySeconds = $InitialDelaySeconds
+`$retryMinutes = $RetryMinutes
+`$retryIntervalSeconds = $RetryIntervalSeconds
 
 function Write-BootstrapLog {
     param([string]`$Message)
@@ -61,28 +86,62 @@ function Write-BootstrapLog {
     Add-Content -Path `$logPath -Value "[`$timestamp] `$Message"
 }
 
-try {
+function Find-MountScript {
     `$mountScript = `$null
 
     foreach (`$drive in Get-PSDrive -PSProvider FileSystem) {
-        `$candidate = Join-Path `$drive.Root `$relativeMountScript
-        if (Test-Path -LiteralPath `$candidate) {
-            `$mountScript = `$candidate
-            break
+        try {
+            `$candidate = Join-Path `$drive.Root `$relativeMountScript
+            if (Test-Path -LiteralPath `$candidate) {
+                return `$candidate
+            }
+        }
+        catch {
+            Write-BootstrapLog "Drive ainda indisponivel: `$(`$drive.Root)"
         }
     }
 
-    if (-not `$mountScript -and (Test-Path -LiteralPath `$fallbackMountScript)) {
-        `$mountScript = `$fallbackMountScript
+    if (Test-Path -LiteralPath `$fallbackMountScript) {
+        return `$fallbackMountScript
     }
 
-    if (-not `$mountScript) {
-        throw "Nao encontrei o script de montagem: `$relativeMountScript"
+    return `$null
+}
+
+try {
+    if (`$initialDelaySeconds -gt 0) {
+        Write-BootstrapLog "Aguardando `$initialDelaySeconds segundos pelo logon/BitLocker."
+        Start-Sleep -Seconds `$initialDelaySeconds
     }
 
-    Write-BootstrapLog "Executando `$mountScript"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$mountScript
-    exit `$LASTEXITCODE
+    `$deadline = (Get-Date).AddMinutes(`$retryMinutes)
+    `$lastError = ''
+
+    do {
+        `$mountScript = Find-MountScript
+
+        if (-not `$mountScript) {
+            `$lastError = "Nao encontrei o script de montagem: `$relativeMountScript"
+            Write-BootstrapLog "`$lastError. O volume pode estar bloqueado pelo BitLocker."
+        }
+        else {
+            Write-BootstrapLog "Executando `$mountScript"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$mountScript -NoElevate
+            `$exitCode = `$LASTEXITCODE
+
+            if (`$exitCode -eq 0) {
+                Write-BootstrapLog "Montagem concluida com sucesso."
+                exit 0
+            }
+
+            `$lastError = "Script de montagem saiu com codigo `$exitCode"
+            Write-BootstrapLog "`$lastError. Tentando novamente."
+        }
+
+        Start-Sleep -Seconds `$retryIntervalSeconds
+    } while ((Get-Date) -lt `$deadline)
+
+    throw "`$lastError"
 }
 catch {
     Write-BootstrapLog `$_.Exception.Message
@@ -122,6 +181,7 @@ Register-ScheduledTask `
 
 Write-Host "OK: tarefa registrada: $TaskName"
 Write-Host "Bootstrap: $bootstrapPath"
+Write-Host "Politica BitLocker/logon: atraso inicial de $InitialDelaySeconds s, tentativas por $RetryMinutes min a cada $RetryIntervalSeconds s."
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName
