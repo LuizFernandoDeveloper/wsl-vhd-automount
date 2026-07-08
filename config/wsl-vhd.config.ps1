@@ -20,11 +20,15 @@ $WslVhdConfig = @{
     # Set to false only if an older WSL build needs the Mount-VHD + PhysicalDrive flow.
     PreferDirectVhdMount = $true
 
-    # Start the WSL service before mounting so WSL is awake as early as possible.
+    # Used by the Bootstrap/manual PowerShell path. Direct mode lets wsl.exe wake itself.
     WarmWslService = $true
 
     LogDirectory = '.\logs'
     TaskName = 'WSL VHD Automount'
+
+    # Direct is the fastest logon path: Task Scheduler calls wsl.exe itself.
+    # Bootstrap keeps the old retry/log wrapper for hosts that need extra resilience.
+    StartupTaskMode = 'Direct'
 
     # Run immediately at logon. Retries handle the small BitLocker/drive unlock race.
     StartupInitialDelaySeconds = 0

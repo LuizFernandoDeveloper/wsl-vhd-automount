@@ -12,7 +12,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-2563eb">
 </p>
 
-Automount rapido para VHDX ext4 no WSL 2. Ele monta um disco Linux extra no logon do Windows sem depender de `\\.\PHYSICALDRIVE2` fixo, acorda o WSL cedo, usa prioridade ajustada na Tarefa Agendada e trata o caso comum em que o VHDX fica dentro de um volume protegido por BitLocker.
+Automount rapido para VHDX ext4 no WSL 2. Ele monta um disco Linux extra no logon do Windows sem depender de `\\.\PHYSICALDRIVE2` fixo, usando uma Tarefa Agendada que chama o `wsl.exe` diretamente com `--mount ... --vhd`.
 
 > Objetivo: terminou o logon, o Windows liberou o drive, o WSL ja tenta montar o VHDX em `/mnt/wsl/media-removivel`.
 
@@ -46,7 +46,8 @@ Este projeto resolve de duas formas:
 
 | Modo | Quando usar | Como funciona |
 | --- | --- | --- |
-| Rapido, padrao | WSL moderno | `wsl --mount <VHDX> --vhd`, sem passar pelo numero `PHYSICALDRIVE` |
+| Direct, padrao | Mais rapido | Tarefa Agendada chama `C:\Windows\System32\wsl.exe` direto com `--mount <VHDX> --vhd` |
+| Bootstrap | Mais resiliente | PowerShell procura a pasta, registra log, faz retry proprio e chama o script de montagem |
 | Compativel | WSL antigo ou fallback | `Mount-VHD`, descobre o `PhysicalDrive` dinamicamente com `Get-Disk`, e so entao chama `wsl --mount` |
 
 O modo rapido fica ativo por padrao porque seu WSL atual ja mostra suporte a `wsl --mount --vhd`.
@@ -94,11 +95,11 @@ Para volume com BitLocker, a melhor janela e o **logon**, nao o boot puro. Antes
 Configuracao atual focada em velocidade:
 
 ```powershell
+StartupTaskMode = 'Direct'
 StartupInitialDelaySeconds = 0
 StartupRetryMinutes = 10
 StartupRetryIntervalSeconds = 3
 TaskPriority = 4
-WarmWslService = $true
 PreferDirectVhdMount = $true
 ```
 
@@ -107,11 +108,19 @@ O que isso significa:
 | Ajuste | Valor | Motivo |
 | --- | ---: | --- |
 | Inicio imediato | `0s` | a task dispara assim que o usuario faz logon |
-| Retry curto | `3s` | se BitLocker/drive ainda estiver terminando de liberar, tenta de novo rapido |
-| Janela de retry | `10min` | cobre logons lentos, USB/removivel e desbloqueio manual |
+| Modo da task | `Direct` | chama `wsl.exe` sem PowerShell no caminho critico |
+| Restart curto | `3s` | se BitLocker/drive ainda estiver terminando de liberar, o Agendador tenta de novo rapido |
+| Janela de restart | `10min` | cobre logons lentos, USB/removivel e desbloqueio manual |
 | Prioridade da task | `4` | evita o padrao `7`, que o Windows usa para tarefas em background |
-| Warmup do WSL | ligado | tenta iniciar `LxssManager` antes do mount |
 | Mount direto | ligado | usa `wsl --mount --vhd` e evita `PhysicalDrive` |
+
+No Agendador de Tarefas, a acao fica assim:
+
+| Campo | Valor |
+| --- | --- |
+| Programa/script | `C:\Windows\System32\wsl.exe` |
+| Argumentos | `--mount D:\disk-removivel-wsl2\WSL_Drives.vhdx --vhd --type ext4 --name media-removivel` |
+| Iniciar em | vazio |
 
 ### Auto-unlock Do BitLocker
 
@@ -167,6 +176,7 @@ $WslVhdConfig = @{
     PreferDirectVhdMount = $true
     WarmWslService = $true
 
+    StartupTaskMode = 'Direct'
     StartupInitialDelaySeconds = 0
     StartupRetryMinutes = 10
     StartupRetryIntervalSeconds = 3
@@ -176,13 +186,20 @@ $WslVhdConfig = @{
 
 ### Quando Trocar O Modo De Mount
 
-Mantenha:
+Mantenha o modo direto para velocidade:
 
 ```powershell
+StartupTaskMode = 'Direct'
 PreferDirectVhdMount = $true
 ```
 
-Troque para `false` se o seu WSL nao aceitar `--vhd` ou se voce quiser reproduzir o fluxo classico `Mount-VHD` + `Get-Disk` + `wsl --mount`.
+Use bootstrap quando quiser log proprio, procura por drive em letras diferentes, ou retry dentro do PowerShell:
+
+```powershell
+StartupTaskMode = 'Bootstrap'
+```
+
+Troque `PreferDirectVhdMount` para `false` se o seu WSL nao aceitar `--vhd` ou se voce quiser reproduzir o fluxo classico `Mount-VHD` + `Get-Disk` + `wsl --mount`.
 
 ## Diagnostico Do Host
 
@@ -211,17 +228,14 @@ Get-BitLockerVolume
 ```mermaid
 flowchart LR
     A["Logon do usuario"] --> B["Tarefa Agendada elevada"]
-    B --> C["Bootstrap em %LOCALAPPDATA%"]
-    C --> D{"Projeto encontrado?"}
-    D -->|"Sim"| E["Acorda LxssManager"]
-    D -->|"Nao"| C
-    E --> F{"VHDX acessivel?"}
-    F -->|"BitLocker ainda liberando"| C
-    F -->|"Sim"| G["wsl --mount --vhd"]
-    G --> H["/mnt/wsl/media-removivel"]
+    B --> C["C:\\Windows\\System32\\wsl.exe"]
+    C --> D["--mount D:\\...\\WSL_Drives.vhdx --vhd"]
+    D --> E{"VHDX acessivel?"}
+    E -->|"BitLocker ainda liberando"| B
+    E -->|"Sim"| F["/mnt/wsl/media-removivel"]
 ```
 
-O bootstrap fica em:
+No modo `Bootstrap`, o wrapper fica em:
 
 ```text
 %LOCALAPPDATA%\WslVhdAutomount\Start-WslVhdAutomount.ps1
@@ -233,17 +247,23 @@ Ele procura o projeto em todos os drives. Isso ajuda quando a letra da midia mud
 
 ### A montagem nao apareceu no WSL
 
-Veja os logs:
+No modo `Direct`, veja primeiro o resultado da Tarefa Agendada:
 
-```text
-.\logs\wsl-vhd-automount.log
-%LOCALAPPDATA%\WslVhdAutomount\bootstrap.log
+```powershell
+Get-ScheduledTaskInfo -TaskName "WSL VHD Automount"
 ```
 
 Depois rode:
 
 ```powershell
 .\scripts\Show-Status.ps1
+```
+
+No modo `Bootstrap`, veja tambem os logs:
+
+```text
+.\logs\wsl-vhd-automount.log
+%LOCALAPPDATA%\WslVhdAutomount\bootstrap.log
 ```
 
 ### O VHDX esta em um drive BitLocker

@@ -6,6 +6,7 @@ param(
     [int]$RetryMinutes = -1,
     [int]$RetryIntervalSeconds = -1,
     [int]$TaskPriority = -1,
+    [string]$TaskMode = '',
     [switch]$RunNow,
     [switch]$NoElevate
 )
@@ -37,6 +38,9 @@ if (-not (Test-WslVhdAdministrator)) {
     if ($TaskPriority -ge 0) {
         $elevatedArgs += @('-TaskPriority', "$TaskPriority")
     }
+    if (-not [string]::IsNullOrWhiteSpace($TaskMode)) {
+        $elevatedArgs += @('-TaskMode', $TaskMode)
+    }
     if ($RunNow) { $elevatedArgs += '-RunNow' }
 
     Invoke-WslVhdSelfElevation -ScriptPath $PSCommandPath -ArgumentList $elevatedArgs
@@ -66,19 +70,58 @@ if ($RetryIntervalSeconds -lt 0) {
 if ($TaskPriority -lt 0) {
     $TaskPriority = [int](Get-WslVhdConfigValue -Config $config -Name 'TaskPriority' -Default 4)
 }
+if ([string]::IsNullOrWhiteSpace($TaskMode)) {
+    $TaskMode = [string](Get-WslVhdConfigValue -Config $config -Name 'StartupTaskMode' -Default 'Direct')
+}
 
-$mountScript = Join-Path $projectRoot 'scripts\Mount-WslVhd.ps1'
-$driveRoot = [System.IO.Path]::GetPathRoot($projectRoot)
-$relativeProjectRoot = $projectRoot.Substring($driveRoot.Length).TrimStart('\')
-$relativeMountScript = Join-Path $relativeProjectRoot 'scripts\Mount-WslVhd.ps1'
+$validTaskModes = @('Direct', 'Bootstrap')
+if ($TaskMode -notin $validTaskModes) {
+    throw "StartupTaskMode invalido: '$TaskMode'. Use Direct ou Bootstrap."
+}
 
 $bootstrapDir = Join-Path $env:LOCALAPPDATA 'WslVhdAutomount'
 $bootstrapPath = Join-Path $bootstrapDir 'Start-WslVhdAutomount.ps1'
 $bootstrapLog = Join-Path $bootstrapDir 'bootstrap.log'
 
-New-Item -ItemType Directory -Force -Path $bootstrapDir | Out-Null
+if ($TaskMode -eq 'Direct') {
+    $vhdPath = Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'VhdPath')) -BasePath $projectRoot -MustExist
+    $mountName = [string](Get-WslVhdConfigValue -Config $config -Name 'MountName' -Default 'media-removivel')
+    $fileSystem = [string](Get-WslVhdConfigValue -Config $config -Name 'FileSystem' -Default 'ext4')
+    $partition = Get-WslVhdConfigValue -Config $config -Name 'Partition'
+    $mountOptions = [string](Get-WslVhdConfigValue -Config $config -Name 'MountOptions' -Default '')
 
-$bootstrap = @"
+    Assert-WslVhdMountName -MountName $mountName
+
+    $wslExe = Join-Path $env:WINDIR 'System32\wsl.exe'
+    $directArgs = @('--mount', $vhdPath, '--vhd')
+
+    if (-not [string]::IsNullOrWhiteSpace($fileSystem)) {
+        $directArgs += @('--type', $fileSystem)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mountName)) {
+        $directArgs += @('--name', $mountName)
+    }
+
+    if ($null -ne $partition -and "$partition" -ne '') {
+        $directArgs += @('--partition', "$partition")
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mountOptions)) {
+        $directArgs += @('--options', $mountOptions)
+    }
+
+    $action = New-ScheduledTaskAction -Execute $wslExe -Argument (Join-WslVhdCommandLine -ArgumentList $directArgs)
+}
+else {
+    $mountScript = Join-Path $projectRoot 'scripts\Mount-WslVhd.ps1'
+    $driveRoot = [System.IO.Path]::GetPathRoot($projectRoot)
+    $relativeProjectRoot = $projectRoot.Substring($driveRoot.Length).TrimStart('\')
+    $relativeMountScript = Join-Path $relativeProjectRoot 'scripts\Mount-WslVhd.ps1'
+
+    New-Item -ItemType Directory -Force -Path $bootstrapDir | Out-Null
+
+    $bootstrap = @"
 `$ErrorActionPreference = 'Stop'
 `$relativeMountScript = '$($relativeMountScript -replace "'", "''")'
 `$fallbackMountScript = '$($mountScript -replace "'", "''")'
@@ -156,28 +199,31 @@ catch {
 }
 "@
 
-Set-Content -LiteralPath $bootstrapPath -Value $bootstrap -Encoding ASCII
+    Set-Content -LiteralPath $bootstrapPath -Value $bootstrap -Encoding ASCII
 
-$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
-$actionArgs = Join-WslVhdCommandLine -ArgumentList @(
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-WindowStyle', 'Hidden',
-    '-File', $bootstrapPath
-)
+    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    $actionArgs = Join-WslVhdCommandLine -ArgumentList @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle', 'Hidden',
+        '-File', $bootstrapPath
+    )
 
-$action = New-ScheduledTaskAction -Execute $powershell -Argument $actionArgs
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument $actionArgs
+}
 $userId = "$env:USERDOMAIN\$env:USERNAME"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
+$effectiveRetryIntervalSeconds = [Math]::Max(1, $RetryIntervalSeconds)
+$effectiveRestartCount = [Math]::Max(1, [int][Math]::Ceiling(($RetryMinutes * 60) / [double]$effectiveRetryIntervalSeconds))
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
     -Priority $TaskPriority `
-    -RestartCount 20 `
-    -RestartInterval (New-TimeSpan -Seconds 15) `
+    -RestartCount $effectiveRestartCount `
+    -RestartInterval (New-TimeSpan -Seconds $effectiveRetryIntervalSeconds) `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 Register-ScheduledTask `
@@ -190,10 +236,22 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Write-Host "OK: tarefa registrada: $TaskName"
-Write-Host "Bootstrap: $bootstrapPath"
-Write-Host "Politica BitLocker/logon: inicio imediato, atraso inicial de $InitialDelaySeconds s, tentativas por $RetryMinutes min a cada $RetryIntervalSeconds s, prioridade $TaskPriority."
+Write-Host "Modo: $TaskMode"
+if ($TaskMode -eq 'Direct') {
+    Write-Host "Programa/script: $wslExe"
+    Write-Host "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $directArgs)"
+}
+else {
+    Write-Host "Bootstrap: $bootstrapPath"
+}
+Write-Host "Politica BitLocker/logon: inicio imediato, atraso inicial de $InitialDelaySeconds s, restart por $RetryMinutes min a cada $effectiveRetryIntervalSeconds s, prioridade $TaskPriority."
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName
-    Write-Host "Tarefa iniciada agora. Veja logs em: $bootstrapDir"
+    if ($TaskMode -eq 'Bootstrap') {
+        Write-Host "Tarefa iniciada agora. Veja logs em: $bootstrapDir"
+    }
+    else {
+        Write-Host "Tarefa direta iniciada agora. Confira o resultado no Agendador de Tarefas ou rode .\scripts\Show-Status.ps1."
+    }
 }
