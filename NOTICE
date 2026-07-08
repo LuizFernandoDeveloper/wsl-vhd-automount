@@ -1,0 +1,5 @@
+wsl-vhd-automount
+Copyright 2026 Luiz Fernando
+
+This product includes software developed for automating WSL 2 VHDX mounts
+on Windows hosts.
