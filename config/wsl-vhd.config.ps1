@@ -25,10 +25,11 @@ $WslVhdConfig = @{
 
     LogDirectory = '.\logs'
     TaskName = 'WSL VHD Automount'
+    TaskHidden = $true
 
-    # Direct is the fastest logon path: Task Scheduler calls wsl.exe itself.
+    # Logged is hidden, fast and keeps logs. Direct calls wsl.exe without logging.
     # Bootstrap keeps the old retry/log wrapper for hosts that need extra resilience.
-    StartupTaskMode = 'Direct'
+    StartupTaskMode = 'Logged'
 
     # Run immediately at logon. Retries handle the small BitLocker/drive unlock race.
     StartupInitialDelaySeconds = 0
@@ -37,4 +38,7 @@ $WslVhdConfig = @{
 
     # Task Scheduler priority: 0 is highest, 7 is the Windows background default.
     TaskPriority = 4
+
+    LatestLogName = 'automount.latest.log'
+    ErrorLogDirectory = '.\logs\errors'
 }

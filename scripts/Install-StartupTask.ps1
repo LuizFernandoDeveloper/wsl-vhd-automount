@@ -74,16 +74,34 @@ if ([string]::IsNullOrWhiteSpace($TaskMode)) {
     $TaskMode = [string](Get-WslVhdConfigValue -Config $config -Name 'StartupTaskMode' -Default 'Direct')
 }
 
-$validTaskModes = @('Direct', 'Bootstrap')
+$validTaskModes = @('Logged', 'Direct', 'Bootstrap')
 if ($TaskMode -notin $validTaskModes) {
-    throw "StartupTaskMode invalido: '$TaskMode'. Use Direct ou Bootstrap."
+    throw "StartupTaskMode invalido: '$TaskMode'. Use Logged, Direct ou Bootstrap."
 }
 
 $bootstrapDir = Join-Path $env:LOCALAPPDATA 'WslVhdAutomount'
 $bootstrapPath = Join-Path $bootstrapDir 'Start-WslVhdAutomount.ps1'
 $bootstrapLog = Join-Path $bootstrapDir 'bootstrap.log'
 
-if ($TaskMode -eq 'Direct') {
+$taskHidden = [bool](Get-WslVhdConfigValue -Config $config -Name 'TaskHidden' -Default $true)
+
+if ($TaskMode -eq 'Logged') {
+    $runnerScript = Join-Path $projectRoot 'scripts\Invoke-WslVhdAutomount.ps1'
+    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    $runnerArgs = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle', 'Hidden',
+        '-File', $runnerScript
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $runnerArgs += @('-ConfigPath', $ConfigPath)
+    }
+
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument (Join-WslVhdCommandLine -ArgumentList $runnerArgs)
+}
+elseif ($TaskMode -eq 'Direct') {
     $vhdPath = Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'VhdPath')) -BasePath $projectRoot -MustExist
     $mountName = [string](Get-WslVhdConfigValue -Config $config -Name 'MountName' -Default 'media-removivel')
     $fileSystem = [string](Get-WslVhdConfigValue -Config $config -Name 'FileSystem' -Default 'ext4')
@@ -216,15 +234,20 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
 $effectiveRetryIntervalSeconds = [Math]::Max(1, $RetryIntervalSeconds)
 $effectiveRestartCount = [Math]::Max(1, [int][Math]::Ceiling(($RetryMinutes * 60) / [double]$effectiveRetryIntervalSeconds))
-$settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -MultipleInstances IgnoreNew `
-    -Priority $TaskPriority `
-    -RestartCount $effectiveRestartCount `
-    -RestartInterval (New-TimeSpan -Seconds $effectiveRetryIntervalSeconds) `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settingsArgs = @{
+    AllowStartIfOnBatteries = $true
+    DontStopIfGoingOnBatteries = $true
+    StartWhenAvailable = $true
+    MultipleInstances = 'IgnoreNew'
+    Priority = $TaskPriority
+    RestartCount = $effectiveRestartCount
+    RestartInterval = (New-TimeSpan -Seconds $effectiveRetryIntervalSeconds)
+    ExecutionTimeLimit = (New-TimeSpan -Minutes 15)
+}
+if ($taskHidden) {
+    $settingsArgs['Hidden'] = $true
+}
+$settings = New-ScheduledTaskSettingsSet @settingsArgs
 
 Register-ScheduledTask `
     -TaskName $TaskName `
@@ -237,7 +260,12 @@ Register-ScheduledTask `
 
 Write-Host "OK: tarefa registrada: $TaskName"
 Write-Host "Modo: $TaskMode"
-if ($TaskMode -eq 'Direct') {
+if ($TaskMode -eq 'Logged') {
+    Write-Host "Programa/script: $powershell"
+    Write-Host "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $runnerArgs)"
+    Write-Host "Log: $((Resolve-WslVhdPath -Path ([string](Get-WslVhdConfigValue -Config $config -Name 'LogDirectory' -Default '.\logs')) -BasePath $projectRoot))"
+}
+elseif ($TaskMode -eq 'Direct') {
     Write-Host "Programa/script: $wslExe"
     Write-Host "Argumentos: $(Join-WslVhdCommandLine -ArgumentList $directArgs)"
 }
@@ -250,6 +278,9 @@ if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName
     if ($TaskMode -eq 'Bootstrap') {
         Write-Host "Tarefa iniciada agora. Veja logs em: $bootstrapDir"
+    }
+    elseif ($TaskMode -eq 'Logged') {
+        Write-Host "Tarefa silenciosa iniciada agora. Veja logs na pasta configurada."
     }
     else {
         Write-Host "Tarefa direta iniciada agora. Confira o resultado no Agendador de Tarefas ou rode .\scripts\Show-Status.ps1."
