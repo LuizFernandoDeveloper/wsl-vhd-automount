@@ -16,15 +16,21 @@ $WslVhdConfig = @{
     DistroName = ''
     StartDistro = $false
 
-    # Keep this false for maximum compatibility with the old Mount-VHD flow.
-    # If you want to try direct WSL VHD mounting, set this to true.
-    PreferDirectVhdMount = $false
+    # Fast path: let WSL mount the VHDX directly instead of attaching it first in Hyper-V.
+    # Set to false only if an older WSL build needs the Mount-VHD + PhysicalDrive flow.
+    PreferDirectVhdMount = $true
+
+    # Start the WSL service before mounting so WSL is awake as early as possible.
+    WarmWslService = $true
 
     LogDirectory = '.\logs'
     TaskName = 'WSL VHD Automount'
 
-    # BitLocker/removable disks can take a moment to unlock after logon.
-    StartupInitialDelaySeconds = 20
+    # Run immediately at logon. Retries handle the small BitLocker/drive unlock race.
+    StartupInitialDelaySeconds = 0
     StartupRetryMinutes = 10
-    StartupRetryIntervalSeconds = 15
+    StartupRetryIntervalSeconds = 3
+
+    # Task Scheduler priority: 0 is highest, 7 is the Windows background default.
+    TaskPriority = 4
 }

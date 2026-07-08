@@ -41,6 +41,7 @@ $mountOptions = [string](Get-WslVhdConfigValue -Config $config -Name 'MountOptio
 $distroName = [string](Get-WslVhdConfigValue -Config $config -Name 'DistroName' -Default '')
 $startDistro = [bool](Get-WslVhdConfigValue -Config $config -Name 'StartDistro' -Default $false)
 $preferDirectVhdMount = [bool](Get-WslVhdConfigValue -Config $config -Name 'PreferDirectVhdMount' -Default $false)
+$warmWslService = [bool](Get-WslVhdConfigValue -Config $config -Name 'WarmWslService' -Default $true)
 
 Assert-WslVhdMountName -MountName $mountName
 
@@ -53,6 +54,19 @@ try {
     }
 
     Get-Command wsl.exe -ErrorAction Stop | Out-Null
+
+    if ($warmWslService) {
+        try {
+            $service = Get-Service -Name 'LxssManager' -ErrorAction Stop
+            if ($service.Status -ne 'Running') {
+                Write-Host "Acordando servico WSL: LxssManager"
+                Start-Service -Name 'LxssManager' -ErrorAction Stop
+            }
+        }
+        catch {
+            Write-Warning "Nao foi possivel acordar LxssManager antes do mount: $($_.Exception.Message)"
+        }
+    }
 
     if ($ForceRemount) {
         Write-Host "Forcando remontagem anterior, se existir."

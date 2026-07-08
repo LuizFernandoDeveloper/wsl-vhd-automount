@@ -5,6 +5,7 @@ param(
     [int]$InitialDelaySeconds = -1,
     [int]$RetryMinutes = -1,
     [int]$RetryIntervalSeconds = -1,
+    [int]$TaskPriority = -1,
     [switch]$RunNow,
     [switch]$NoElevate
 )
@@ -33,6 +34,9 @@ if (-not (Test-WslVhdAdministrator)) {
     if ($RetryIntervalSeconds -ge 0) {
         $elevatedArgs += @('-RetryIntervalSeconds', "$RetryIntervalSeconds")
     }
+    if ($TaskPriority -ge 0) {
+        $elevatedArgs += @('-TaskPriority', "$TaskPriority")
+    }
     if ($RunNow) { $elevatedArgs += '-RunNow' }
 
     Invoke-WslVhdSelfElevation -ScriptPath $PSCommandPath -ArgumentList $elevatedArgs
@@ -51,13 +55,16 @@ if ([string]::IsNullOrWhiteSpace($TaskName)) {
 }
 
 if ($InitialDelaySeconds -lt 0) {
-    $InitialDelaySeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupInitialDelaySeconds' -Default 20)
+    $InitialDelaySeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupInitialDelaySeconds' -Default 0)
 }
 if ($RetryMinutes -lt 0) {
     $RetryMinutes = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupRetryMinutes' -Default 10)
 }
 if ($RetryIntervalSeconds -lt 0) {
-    $RetryIntervalSeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupRetryIntervalSeconds' -Default 15)
+    $RetryIntervalSeconds = [int](Get-WslVhdConfigValue -Config $config -Name 'StartupRetryIntervalSeconds' -Default 3)
+}
+if ($TaskPriority -lt 0) {
+    $TaskPriority = [int](Get-WslVhdConfigValue -Config $config -Name 'TaskPriority' -Default 4)
 }
 
 $mountScript = Join-Path $projectRoot 'scripts\Mount-WslVhd.ps1'
@@ -168,6 +175,9 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
+    -Priority $TaskPriority `
+    -RestartCount 20 `
+    -RestartInterval (New-TimeSpan -Seconds 15) `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 Register-ScheduledTask `
@@ -181,7 +191,7 @@ Register-ScheduledTask `
 
 Write-Host "OK: tarefa registrada: $TaskName"
 Write-Host "Bootstrap: $bootstrapPath"
-Write-Host "Politica BitLocker/logon: atraso inicial de $InitialDelaySeconds s, tentativas por $RetryMinutes min a cada $RetryIntervalSeconds s."
+Write-Host "Politica BitLocker/logon: inicio imediato, atraso inicial de $InitialDelaySeconds s, tentativas por $RetryMinutes min a cada $RetryIntervalSeconds s, prioridade $TaskPriority."
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName
