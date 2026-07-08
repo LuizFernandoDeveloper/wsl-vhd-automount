@@ -12,7 +12,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-2563eb">
 </p>
 
-Automount rapido para VHDX ext4 no WSL 2. Ele monta um disco Linux extra no logon do Windows sem depender de `\\.\PHYSICALDRIVE2` fixo, usando uma Tarefa Agendada que chama o `wsl.exe` diretamente com `--mount ... --vhd`.
+Automount silencioso e rapido para VHDX ext4 no WSL 2. Ele monta um disco Linux extra no logon do Windows sem depender de `\\.\PHYSICALDRIVE2` fixo, sem abrir janela, chamando `wsl.exe --mount ... --vhd` por um runner escondido que grava logs locais.
 
 > Objetivo: terminou o logon, o Windows liberou o drive, o WSL ja tenta montar o VHDX em `/mnt/wsl/media-removivel`.
 
@@ -46,7 +46,8 @@ Este projeto resolve de duas formas:
 
 | Modo | Quando usar | Como funciona |
 | --- | --- | --- |
-| Direct, padrao | Mais rapido | Tarefa Agendada chama `C:\Windows\System32\wsl.exe` direto com `--mount <VHDX> --vhd` |
+| Logged, padrao | Melhor equilibrio | PowerShell escondido chama `wsl.exe --mount <VHDX> --vhd` e grava log local |
+| Direct | Mais rapido, sem log | Tarefa Agendada chama `C:\Windows\System32\wsl.exe` direto com `--mount <VHDX> --vhd` |
 | Bootstrap | Mais resiliente | PowerShell procura a pasta, registra log, faz retry proprio e chama o script de montagem |
 | Compativel | WSL antigo ou fallback | `Mount-VHD`, descobre o `PhysicalDrive` dinamicamente com `Get-Disk`, e so entao chama `wsl --mount` |
 
@@ -61,7 +62,7 @@ O modo rapido fica ativo por padrao porque seu WSL atual ja mostra suporte a `ws
 Com dois cliques:
 
 ```bat
-instalar_automount_logon.bat
+launchers\instalar_automount_logon.bat
 ```
 
 Ou pelo PowerShell como Administrador:
@@ -95,7 +96,7 @@ Para volume com BitLocker, a melhor janela e o **logon**, nao o boot puro. Antes
 Configuracao atual focada em velocidade:
 
 ```powershell
-StartupTaskMode = 'Direct'
+StartupTaskMode = 'Logged'
 StartupInitialDelaySeconds = 0
 StartupRetryMinutes = 10
 StartupRetryIntervalSeconds = 3
@@ -108,13 +109,21 @@ O que isso significa:
 | Ajuste | Valor | Motivo |
 | --- | ---: | --- |
 | Inicio imediato | `0s` | a task dispara assim que o usuario faz logon |
-| Modo da task | `Direct` | chama `wsl.exe` sem PowerShell no caminho critico |
+| Modo da task | `Logged` | roda escondido e captura log sem abrir tela |
 | Restart curto | `3s` | se BitLocker/drive ainda estiver terminando de liberar, o Agendador tenta de novo rapido |
 | Janela de restart | `10min` | cobre logons lentos, USB/removivel e desbloqueio manual |
 | Prioridade da task | `4` | evita o padrao `7`, que o Windows usa para tarefas em background |
 | Mount direto | ligado | usa `wsl --mount --vhd` e evita `PhysicalDrive` |
 
-No Agendador de Tarefas, a acao fica assim:
+No Agendador de Tarefas, a acao padrao fica assim:
+
+| Campo | Valor |
+| --- | --- |
+| Programa/script | `powershell.exe` |
+| Argumentos | `-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ...\scripts\Invoke-WslVhdAutomount.ps1` |
+| Iniciar em | vazio |
+
+Se voce trocar para `StartupTaskMode = 'Direct'`, a acao fica como na tela manual:
 
 | Campo | Valor |
 | --- | --- |
@@ -127,7 +136,7 @@ No Agendador de Tarefas, a acao fica assim:
 Para montar ainda mais cedo, o drive que contem o VHDX precisa estar desbloqueado automaticamente no logon. O projeto inclui um script para habilitar auto-unlock no drive onde o VHDX mora:
 
 ```bat
-habilitar_bitlocker_autounlock.bat
+launchers\habilitar_bitlocker_autounlock.bat
 ```
 
 Ou:
@@ -142,13 +151,13 @@ Use isso somente no computador em que voce confia. Auto-unlock melhora a ergonom
 
 | Objetivo | Comando |
 | --- | --- |
-| Instalar automount no logon | `.\instalar_automount_logon.bat` |
-| Remover automount | `.\remover_automount_logon.bat` |
-| Montar agora | `.\media_removivel_init.bat` |
+| Instalar automount no logon | `.\launchers\instalar_automount_logon.bat` |
+| Remover automount | `.\launchers\remover_automount_logon.bat` |
+| Montar agora | `.\launchers\media_removivel_init.bat` |
 | Montar via PowerShell | `.\scripts\Mount-WslVhd.ps1` |
 | Ver status | `.\scripts\Show-Status.ps1` |
-| Diagnosticar host | `.\diagnosticar_host_wsl.bat` |
-| Habilitar BitLocker auto-unlock do drive do VHDX | `.\habilitar_bitlocker_autounlock.bat` |
+| Diagnosticar host | `.\launchers\diagnosticar_host_wsl.bat` |
+| Habilitar BitLocker auto-unlock do drive do VHDX | `.\launchers\habilitar_bitlocker_autounlock.bat` |
 | Desmontar | `.\scripts\Unmount-WslVhd.ps1` |
 | Desmontar apos encerrar WSL | `.\scripts\Unmount-WslVhd.ps1 -ShutdownWsl` |
 
@@ -176,21 +185,31 @@ $WslVhdConfig = @{
     PreferDirectVhdMount = $true
     WarmWslService = $true
 
-    StartupTaskMode = 'Direct'
+    StartupTaskMode = 'Logged'
     StartupInitialDelaySeconds = 0
     StartupRetryMinutes = 10
     StartupRetryIntervalSeconds = 3
     TaskPriority = 4
+    TaskHidden = $true
+
+    LatestLogName = 'automount.latest.log'
+    ErrorLogDirectory = '.\logs\errors'
 }
 ```
 
 ### Quando Trocar O Modo De Mount
 
-Mantenha o modo direto para velocidade:
+Mantenha o modo `Logged` para rodar sem tela e com log:
+
+```powershell
+StartupTaskMode = 'Logged'
+PreferDirectVhdMount = $true
+```
+
+Use `Direct` apenas se quiser o caminho cru mais curto e aceitar ficar sem log do comando:
 
 ```powershell
 StartupTaskMode = 'Direct'
-PreferDirectVhdMount = $true
 ```
 
 Use bootstrap quando quiser log proprio, procura por drive em letras diferentes, ou retry dentro do PowerShell:
@@ -206,7 +225,7 @@ Troque `PreferDirectVhdMount` para `false` se o seu WSL nao aceitar `--vhd` ou s
 Rode:
 
 ```bat
-diagnosticar_host_wsl.bat
+launchers\diagnosticar_host_wsl.bat
 ```
 
 O diagnostico coleta:
@@ -228,11 +247,13 @@ Get-BitLockerVolume
 ```mermaid
 flowchart LR
     A["Logon do usuario"] --> B["Tarefa Agendada elevada"]
-    B --> C["C:\\Windows\\System32\\wsl.exe"]
-    C --> D["--mount D:\\...\\WSL_Drives.vhdx --vhd"]
-    D --> E{"VHDX acessivel?"}
-    E -->|"BitLocker ainda liberando"| B
-    E -->|"Sim"| F["/mnt/wsl/media-removivel"]
+    B --> C["powershell.exe -WindowStyle Hidden"]
+    C --> D["Invoke-WslVhdAutomount.ps1"]
+    D --> E["wsl.exe --mount D:\\...\\WSL_Drives.vhdx --vhd"]
+    E --> F{"VHDX acessivel?"}
+    F -->|"BitLocker ainda liberando"| B
+    F -->|"Sim"| G["/mnt/wsl/media-removivel"]
+    D --> H["logs/automount.latest.log"]
 ```
 
 No modo `Bootstrap`, o wrapper fica em:
@@ -245,9 +266,33 @@ Ele procura o projeto em todos os drives. Isso ajuda quando a letra da midia mud
 
 ## Troubleshooting
 
+### Logs Silenciosos
+
+O modo `Logged` grava em:
+
+```text
+logs\automount.latest.log
+logs\errors\
+```
+
+Politica de sobrescrita:
+
+- se `automount.latest.log` era sucesso, ele pode ser sobrescrito pela proxima execucao;
+- se `automount.latest.log` tinha erro, ele e movido para `logs\errors\automount.TIMESTAMP.previous-error.log` antes de uma nova tentativa;
+- se a execucao atual falhar, ela tambem ganha uma copia em `logs\errors\automount.TIMESTAMP.error.log`.
+
+Assim erro antigo nao some em silencio.
+
 ### A montagem nao apareceu no WSL
 
-No modo `Direct`, veja primeiro o resultado da Tarefa Agendada:
+No modo `Logged`, veja primeiro:
+
+```text
+logs\automount.latest.log
+logs\errors\
+```
+
+Depois confira o resultado da Tarefa Agendada:
 
 ```powershell
 Get-ScheduledTaskInfo -TaskName "WSL VHD Automount"
@@ -309,20 +354,22 @@ wsl-vhd-automount
 |   `-- banner.svg
 |-- config
 |   `-- wsl-vhd.config.ps1
+|-- launchers
+|   |-- diagnosticar_host_wsl.bat
+|   |-- habilitar_bitlocker_autounlock.bat
+|   |-- instalar_automount_logon.bat
+|   |-- media_removivel_init.bat
+|   `-- remover_automount_logon.bat
 |-- scripts
 |   |-- Enable-VhdDriveAutoUnlock.ps1
 |   |-- Install-StartupTask.ps1
+|   |-- Invoke-WslVhdAutomount.ps1
 |   |-- Mount-WslVhd.ps1
 |   |-- Remove-StartupTask.ps1
 |   |-- Show-HostReadiness.ps1
 |   |-- Show-Status.ps1
 |   |-- Unmount-WslVhd.ps1
 |   `-- WslVhd.Common.ps1
-|-- diagnosticar_host_wsl.bat
-|-- habilitar_bitlocker_autounlock.bat
-|-- instalar_automount_logon.bat
-|-- media_removivel_init.bat
-|-- remover_automount_logon.bat
 |-- LICENSE
 `-- README.md
 ```
